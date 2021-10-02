@@ -74,10 +74,11 @@ def generate_random_study():
 
     study_id = "GSF" + str(random.randrange(1000, 9999))
 
-    # get a list of genes from the example file
     doc = {
         "study": study_id,
         "contrast": {
+            "name": "first contrast",
+            "formula": "~ A + B + C",
             "gene": [
                 {
                     "id": "a",
@@ -92,8 +93,6 @@ def generate_random_study():
                     "logFC": 3.2
                 },
             ],
-            "name": "first contrast",
-            "formula": "~ A + B + C"
         }
     }
 
@@ -106,6 +105,17 @@ if __name__ == "__main__":
     index_id = "studies"
     print("Populating pstore:")
     print("Generating index...")
+
+    gene_ids = []
+
+    # get a list of genes from the example file
+    with(open("data/LNCap_DMSO_SP2509_24h_merged_reads.csv", 'r')) as f:
+        header = f.readline().rstrip().split(",")
+
+        for line in f:
+            line = line.rstrip().split(",")
+            gene_id = line[0]
+            gene_ids.append(gene_id)
 
     # create index
     generate_study_index(es)
