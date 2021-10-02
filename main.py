@@ -8,7 +8,7 @@ import random
 from elasticsearch import Elasticsearch
 
 
-def generate_study_index(es):
+def generate_study_index(es, index_id):
     """
     Create a new ES index and populate it with random data
 
@@ -16,6 +16,7 @@ def generate_study_index(es):
     ----------
     es: Elasticsearch
         Elasticsearch instance from Elasticsearch package
+    index_id: str
 
     Returns
     -------
@@ -59,47 +60,57 @@ def generate_study_index(es):
     print(res)
 
 
-def generate_random_study():
+def generate_random_study(gene_ids, n_contrasts=5, max_fc=100):
     """
     The procedure is the following:
     1. Generate study id as GSF\d\d\d\d
     2. Generate contrast accession as GSC\d\d\d\d_n, where \d\d\d\d is the same as in GFS\d\d\d\d of the parent study
     3. Generate formula (as a random formula from the list of the 10 different variables)
     4. Generate p-value and FC
-
+    Parameters
+    ----------
+    max_fc: int, default=100
+    n_contrasts: int, default=5
+    gene_ids: list of str
     Returns
     -------
 
     """
 
-    study_id = "GSF" + str(random.randrange(1000, 9999))
+    study_tag = str(random.randrange(1000, 9999))
+    study_id = "GSF" + study_tag
+    contrast_ids = ["GSFC" + study_tag + str(x) for x in range(0, n_contrasts)]
+
+    contrasts = []
+
+    for contrast in contrast_ids:
+        genes = []
+
+        for gene in gene_ids:
+            genes.append({
+                "id": gene,
+                "pvalue": random.random(),
+                "fdr": random.random(),
+                "logFC": random.random() * max_fc
+            })
+
+        contrast = {
+            "name": contrast,
+            "formula": "~ A + B + C",
+            "gene": genes
+        }
+
+        contrasts.append(contrast)
 
     doc = {
         "study": study_id,
-        "contrast": {
-            "name": "first contrast",
-            "formula": "~ A + B + C",
-            "gene": [
-                {
-                    "id": "a",
-                    "pvalue": 0.01,
-                    "fdr": 0.01,
-                    "logFC": 5
-                },
-                {
-                    "id": "b",
-                    "pvalue": 0.04,
-                    "fdr": 0.7,
-                    "logFC": 3.2
-                },
-            ],
-        }
+        "contrast": contrasts
     }
 
     return doc
 
 
-if __name__ == "__main__":
+def main():
     es = Elasticsearch()
 
     index_id = "studies"
@@ -118,11 +129,15 @@ if __name__ == "__main__":
             gene_ids.append(gene_id)
 
     # create index
-    generate_study_index(es)
+    generate_study_index(es, index_id)
 
     # generate random study
-    doc = generate_random_study()
+    doc = generate_random_study(gene_ids)
 
     # add study to index
     res = es.index(index=index_id, body=doc)
     print(res)
+
+
+if __name__ == "__main__":
+    main()
