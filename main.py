@@ -54,11 +54,10 @@ def generate_study_index(es, index_id):
             "number_of_shards": 1,
             "number_of_replicas": 0,
             "max_rescore_window": 200000,
-            "max_result_window": 200000,
+            "max_result_window": 200000,  # that should cover most of the transcript level data
         },
         "mappings": {
             "properties": {
-                "study": {"type": "keyword"},
                 "contrast": {
                     "type": "nested",
                     "properties": {
@@ -82,8 +81,6 @@ def generate_study_index(es, index_id):
         }
     }
 
-
-
     # fully delete the old index and create a new one
     es.indices.delete(index=index_id, ignore=[400, 404])
     res = es.indices.create(index=index_id, body=body, ignore=400)
@@ -95,25 +92,28 @@ def generate_random_study(gene_ids, n_contrasts=5, max_fc=100):
     """
     Generate a list of random json documents, one document per gene id.
     Documents correspond to mappings from generate_study_index function.
-    Study id is generated as GSF\d\d\d\d
-    Contrast is generated  GSC\d\d\d\d_n, where \d\d\d\d is the same as in GFS\d\d\d\d of the parent study
+    Study id is generated as gsf\d\d\d\d
+    Contrast is generated  gsc\d\d\d\d\d, where first 4 \d\d\d\d is the same as in gsf\d\d\d\d of the parent study
     Parameters
     ----------
     max_fc: int, default=100
     n_contrasts: int, default=5
-    gene_ids: list of str
+gene_ids: list of str
     Returns
     -------
-    list:
+    study_id:
+        the random name of the study;
+    docs:
         list of jsons, one json per gene id
     """
 
     study_tag = str(random.randrange(1000, 9999))
-    study_id = "GSF" + study_tag
-    contrast_ids = ["GSFC" + study_tag + str(x) for x in range(0, n_contrasts)]
+    study_id = "gsf" + study_tag
+    contrast_ids = ["gsc" + study_tag + str(x) for x in range(0, n_contrasts)]
 
     docs = []
 
+    # generate the index for the study
     for contrast in contrast_ids:
 
         contrast = {
@@ -130,12 +130,12 @@ def generate_random_study(gene_ids, n_contrasts=5, max_fc=100):
             }
 
             docs.append({
-                "study": study_id,
+                # "study": study_id, # - comment this out if we don't want study id as a separate field for each index
                 "contrast": contrast,
                 "gene": gene
             })
 
-    return docs
+    return study_id, docs
 
 
 def insert_random_study(es, index_id, docs):
@@ -172,9 +172,15 @@ def insert_random_study(es, index_id, docs):
 
 
 def main():
+    """
+    Generate a random study and insert it as a separate index into the database.
+    Returns
+    -------
+
+    """
     es = Elasticsearch()
 
-    index_id = "studies"
+    # index_id = "studies"
     print("Populating pstore:")
     print("Generating index...")
 
@@ -189,14 +195,15 @@ def main():
             gene_id = line[0]
             gene_ids.append(gene_id)
 
-    # create index
-    generate_study_index(es, index_id)
-
-    # generate 100 random stud
+    # generate n random studies
     for i in range(0, 10):
         print(f"Inserting study {i}")
-        s = generate_random_study(gene_ids)
-        insert_random_study(es, index_id, s)
+        study_id, docs = generate_random_study(gene_ids)
+
+        # create index
+        generate_study_index(es, study_id)  # use study_id as index id
+        # insert study into index
+        insert_random_study(es, study_id, docs)  # use study_id as index id
 
 
 if __name__ == "__main__":
