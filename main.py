@@ -1,94 +1,23 @@
 #!/usr/bin/env python
 
-# This script populates elasticstore with the sample data.
-# The schema is defined in the generate_study_index function
-# The random study generation is defined in the generate_random_study function
+"""
+This script populates tiledb database with sample data.
+Each study has 2 arrays (for now):
+{study_id}_tpm
+{study_id}_sig
+"""
 import random
-
-from elasticsearch import Elasticsearch
-from elasticsearch import helpers
+import numpy as np
+import tiledb
+import os
+import shutil
 
 
 def generate_study_index(es, index_id):
-    """
-    Create a new ES index using the following mappings:
-
-        "mappings": {
-            "properties": {
-                "study": {"type": "keyword"},
-                "contrast": {
-                    "properties": {
-                        "name": {
-                            "type": "keyword"
-                        },
-                        "formula": {
-                            "type": "text"
-                        }
-                    }
-                },
-                "gene": {
-                    "properties": {
-                        "id": {"type": "keyword"},
-                        "pvalue": {"type": "float"},
-                        "fdr": {"type": "float"},
-                        "logFC": {"type": "float"}
-                    }
-                },
-            }
-        }
-
-    Parameters
-    ----------
-    es: Elasticsearch
-        Elasticsearch instance from Elasticsearch package
-    index_id: str
-
-    Returns
-    -------
-    """
-
-    # define mapping schema
-    # max_rescore_window index settings is 200000
-    body = {
-        "settings": {
-            "number_of_shards": 1,
-            "number_of_replicas": 0,
-            "max_rescore_window": 200000,
-            "max_result_window": 200000,  # that should cover most of the transcript level data
-        },
-        "mappings": {
-            "properties": {
-                "contrast": {
-                    "type": "nested",
-                    "properties": {
-                        "name": {
-                            "type": "keyword"
-                        },
-                        "formula": {
-                            "type": "text"
-                        }
-                    }
-                },
-                "gene": {
-                    "properties": {
-                        "id": {"type": "keyword"},
-                        "pvalue": {"type": "float"},
-                        "fdr": {"type": "float"},
-                        "logFC": {"type": "float"}
-                    }
-                },
-            }
-        }
-    }
-
-    # fully delete the old index and create a new one
-    es.indices.delete(index=index_id, ignore=[400, 404])
-    res = es.indices.create(index=index_id, body=body, ignore=400)
-
-    print(res)
+    pass
 
 
-def generate_random_study(gene_ids, n_contrasts=5, max_fc=100):
+def generate_random_study(gene_ids, n_contrasts=20, max_fc=100):
     """
     Generate a list of random json documents, one document per gene id.
     Documents correspond to mappings from generate_study_index function.
@@ -98,7 +27,7 @@ def generate_random_study(gene_ids, n_contrasts=5, max_fc=100):
     ----------
     max_fc: int, default=100
     n_contrasts: int, default=5
-gene_ids: list of str
+    gene_ids: list of str
     Returns
     -------
     study_id:
@@ -111,79 +40,66 @@ gene_ids: list of str
     study_id = "gsf" + study_tag
     contrast_ids = ["gsc" + study_tag + str(x) for x in range(0, n_contrasts)]
 
-    docs = []
+    contrasts = []
 
-    # generate the index for the study
+    # generate the signatures for the study
     for contrast in contrast_ids:
+        pvalues = np.random.default_rng().uniform(0, 1, len(gene_ids))
+        fdr = np.random.default_rng().uniform(0, 1, len(gene_ids))
+        logfc = np.random.default_rng().uniform(-100, 100, len(gene_ids))
 
         contrast = {
             "name": contrast,
             "formula": "~ A + B + C",
+            "pvalues": pvalues,
+            "fdr": fdr,
+            "logfc": logfc
         }
 
-        for gene_id in gene_ids:
-            gene = {
-                "id": gene_id,
-                "pvalue": random.random(),
-                "fdr": random.random(),
-                "logFC": random.random() * max_fc
-            }
+        contrasts.append(contrast)
 
-            docs.append({
-                # "study": study_id, # - comment this out if we don't want study id as a separate field for each index
-                "contrast": contrast,
-                "gene": gene
-            })
+    # generate counts for the study
+    tpm = np.random.default_rng().uniform(0, 10000, (len(gene_ids), 100))
 
-    return study_id, docs
+    return study_id, contrasts, tpm
 
 
-def insert_random_study(es, index_id, docs):
-    """
-    Insert a list of documents into an index indicated by index_id.
+def insert_study_signatures(study_id, contrasts, gene_ids, base_uri=""):
+    # define dimensions and domain
+    genes_dim = tiledb.Dim(name="genes", domain=(1, len(gene_ids)), tile=1000, dtype=np.uint32)
+    contrasts_dim = tiledb.Dim(name="contrasts", domain=(1, len(contrasts)), tile=3, dtype=np.uint32)
+    domain = tiledb.Domain(genes_dim, contrasts_dim)
+
+    # define attributes
+    # noinspection PyTypeChecker
+    pval_attr = tiledb.Attr(name="pvalue", dtype=np.float64)
+    # noinspection PyTypeChecker
+    fdr_attr = tiledb.Attr(name="fdr", dtype=np.float64)
+    # noinspection PyTypeChecker
+    logfc_attr = tiledb.Attr(name="logFC", dtype=np.float64)
+
+    schema = tiledb.ArraySchema(domain=domain,
+                                sparse=False,
+                                attrs=[pval_attr, fdr_attr, logfc_attr],
+                                cell_order='col-major',
+                                tile_order='col-major')
+
+    array_uri = os.path.join(base_uri, study_id + "_sig")
+    tiledb.DenseArray.create(array_uri, schema)
+
+    with tiledb.open(array_uri, 'w') as A:
+        for i, contrast in enumerate(contrasts):
+            print("burning witches")
+            A[:, i + 1] = {"pvalue": contrast["pvalues"],
+                           "fdr": contrast["fdr"],
+                            "logFC": contrast["logfc"]}
 
 
-    Parameters
-    ----------
-    es: Elasticsearch
-        Elasticsearch object
-    index_id: str
-              Name of the index to which to insert the docs,
-    docs:
-
-    Returns
-    -------
-    json:
-        Elasticsearch response json object
-    """
-
-    # add study to index
-    # this is the way to invoke the bulk api as described at:
-    # https://elasticsearch-py.readthedocs.io/en/master/helpers.html#example
-    def iterate_docs():
-        for d in docs:
-            yield {
-                "_index": index_id,
-                "_type": "_doc",
-                "_source": d
-            }
-
-    return helpers.bulk(es, iterate_docs())
+def insert_study_values(study_id, docs):
+    pass
 
 
-def main():
-    """
-    Generate a random study and insert it as a separate index into the database.
-    Returns
-    -------
-
-    """
-    es = Elasticsearch()
-
-    # index_id = "studies"
-    print("Populating pstore:")
-    print("Generating index...")
-
+def get_gene_ids():
     gene_ids = []
 
     # get a list of genes from the example file
@@ -194,16 +110,26 @@ def main():
             line = line.rstrip().split(",")
             gene_id = line[0]
             gene_ids.append(gene_id)
+    return gene_ids
 
-    # generate n random studies
-    for i in range(0, 10):
-        print(f"Inserting study {i}")
-        study_id, docs = generate_random_study(gene_ids)
 
-        # create index
-        generate_study_index(es, study_id)  # use study_id as index id
-        # insert study into index
-        insert_random_study(es, study_id, docs)  # use study_id as index id
+def main():
+    """
+    Generate a random study and insert it as a separate index into the database.
+    Returns
+    -------
+
+    """
+    # generate random dataset
+    database_directory = "/home/suslik/Documents/programming/envision/backend/middle_layer/latest/database"
+    shutil.rmtree(database_directory)
+    os.mkdir(database_directory)
+    base_uri = tiledb.group_create(os.path.join(database_directory, "statistics"))
+    gene_ids = get_gene_ids()
+
+    for i in range(1, 10):
+        study_id, contrasts, tpm = generate_random_study(gene_ids, n_contrasts=5)
+        insert_study_signatures(study_id, contrasts, gene_ids, base_uri=base_uri)
 
 
 if __name__ == "__main__":
