@@ -11,21 +11,20 @@ import numpy as np
 import tiledb
 import os
 import shutil
+from typing import List, Optional
 
 
-def generate_study_index(es, index_id):
-    pass
-
-
-def generate_random_study(gene_ids, n_contrasts=20, max_fc=100):
+def generate_random_study(gene_ids: List,
+                          n_contrasts: int = 20,
+                          max_fc: int = 100):
     """
     Generate a list of random json documents, one document per gene id.
     Documents correspond to mappings from generate_study_index function.
-    Study id is generated as gsf\d\d\d\d
-    Contrast is generated  gsc\d\d\d\d\d, where first 4 \d\d\d\d is the same as in gsf\d\d\d\d of the parent study
+
     Parameters
     ----------
     max_fc: int, default=100
+            Absolute maximum value of FC
     n_contrasts: int, default=5
     gene_ids: list of str
     Returns
@@ -35,7 +34,6 @@ def generate_random_study(gene_ids, n_contrasts=20, max_fc=100):
     docs:
         list of jsons, one json per gene id
     """
-
     study_tag = str(random.randrange(1000, 9999))
     study_id = "gsf" + study_tag
     contrast_ids = ["gsc" + study_tag + str(x) for x in range(0, n_contrasts)]
@@ -46,10 +44,10 @@ def generate_random_study(gene_ids, n_contrasts=20, max_fc=100):
     for contrast in contrast_ids:
         pvalues = np.random.default_rng().uniform(0, 1, len(gene_ids))
         fdr = np.random.default_rng().uniform(0, 1, len(gene_ids))
-        logfc = np.random.default_rng().uniform(-100, 100, len(gene_ids))
+        logfc = np.random.default_rng().uniform(-max_fc, max_fc, len(gene_ids))
 
         contrast = {
-            "name": contrast,
+            "id": contrast,
             "formula": "~ A + B + C",
             "pvalues": pvalues,
             "fdr": fdr,
@@ -64,10 +62,11 @@ def generate_random_study(gene_ids, n_contrasts=20, max_fc=100):
     return study_id, contrasts, tpm
 
 
-def insert_study_signatures(study_id, contrasts, gene_ids, base_uri=""):
+def insert_study_stats(contrasts, gene_ids, base_uri=""):
+    # TODO check cell order
     # define dimensions and domain
-    genes_dim = tiledb.Dim(name="genes", domain=(1, len(gene_ids)), tile=1000, dtype=np.uint32)
-    contrasts_dim = tiledb.Dim(name="contrasts", domain=(1, len(contrasts)), tile=3, dtype=np.uint32)
+    genes_dim = tiledb.Dim(name="genes", tile=1000, dtype=np.bytes_)
+    contrasts_dim = tiledb.Dim(name="contrasts", tile=3, dtype=np.bytes_)
     domain = tiledb.Domain(genes_dim, contrasts_dim)
 
     # define attributes
@@ -79,20 +78,52 @@ def insert_study_signatures(study_id, contrasts, gene_ids, base_uri=""):
     logfc_attr = tiledb.Attr(name="logFC", dtype=np.float64)
 
     schema = tiledb.ArraySchema(domain=domain,
-                                sparse=False,
+                                sparse=True,
                                 attrs=[pval_attr, fdr_attr, logfc_attr],
                                 cell_order='col-major',
                                 tile_order='col-major')
 
-    array_uri = os.path.join(base_uri, study_id + "_sig")
-    tiledb.DenseArray.create(array_uri, schema)
+    stats_uri = os.path.join(base_uri, "stats")
 
-    with tiledb.open(array_uri, 'w') as A:
+    # create statistics array
+    tiledb.SparseArray.create(stats_uri, schema)
+    with tiledb.open(stats_uri, 'w') as A:
         for i, contrast in enumerate(contrasts):
             print("burning witches")
-            A[:, i + 1] = {"pvalue": contrast["pvalues"],
-                           "fdr": contrast["fdr"],
-                            "logFC": contrast["logfc"]}
+            contrast_coords = [contrast['id']] * len(gene_ids)  # required for tiledb sparse writes
+            A[gene_ids, contrast_coords] = {"pvalue": contrast["pvalues"],
+                                            "fdr": contrast["fdr"],
+                                            "logFC": contrast["logfc"]}
+
+
+def insert_study_contrasts(contrasts: List,
+                           base_uri: Optional[str] = ""):
+    """
+    Insert contrast information into the dense array with only one dimension - contrastid
+    Parameters
+    ----------
+    base_uri
+    study_id
+    contrasts
+
+    Returns
+    -------
+
+    """
+    contrasts_dim = tiledb.Dim(name="contrasts", dtype=np.bytes_)
+    domain = tiledb.Domain(contrasts_dim)
+    formula_attr = tiledb.Attr(name="formula", dtype=np.bytes_)
+
+    schema = tiledb.ArraySchema(domain=domain,
+                                sparse=True,
+                                attrs=[formula_attr])
+
+    contrasts_uri = os.path.join(base_uri, "contrasts")
+    tiledb.SparseArray.create(contrasts_uri, schema)
+
+    with tiledb.open(contrasts_uri, 'w') as A:
+        for contrast in contrasts:
+            A[contrast["id"]] = contrast["formula"]
 
 
 def insert_study_values(study_id, docs):
@@ -124,12 +155,17 @@ def main():
     database_directory = "/home/suslik/Documents/programming/envision/backend/middle_layer/latest/database"
     shutil.rmtree(database_directory)
     os.mkdir(database_directory)
-    base_uri = tiledb.group_create(os.path.join(database_directory, "statistics"))
+    base_uri = tiledb.group_create(os.path.join(database_directory))
     gene_ids = get_gene_ids()
 
     for i in range(1, 10):
         study_id, contrasts, tpm = generate_random_study(gene_ids, n_contrasts=5)
-        insert_study_signatures(study_id, contrasts, gene_ids, base_uri=base_uri)
+
+        group_uri = os.path.join(base_uri, study_id)
+        tiledb.group_create(group_uri)
+
+        insert_study_stats(contrasts, gene_ids, base_uri=group_uri)
+        insert_study_contrasts(contrasts, base_uri=group_uri)
 
 
 if __name__ == "__main__":
