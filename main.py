@@ -8,10 +8,12 @@ Each study has 2 arrays (for now):
 """
 import random
 import numpy as np
+import statsmodels.stats.multitest as sm
 import tiledb
 import os
 import shutil
 from typing import List, Optional
+from sklearn.utils.extmath import cartesian
 
 
 def generate_random_study(gene_ids: List,
@@ -43,7 +45,7 @@ def generate_random_study(gene_ids: List,
     # generate the signatures for the study
     for contrast in contrast_ids:
         pvalues = np.random.default_rng().uniform(0, 1, len(gene_ids))
-        fdr = np.random.default_rng().uniform(0, 1, len(gene_ids))
+        fdr = sm.fdrcorrection(pvalues)[1]
         logfc = np.random.default_rng().uniform(-max_fc, max_fc, len(gene_ids))
 
         contrast = {
@@ -58,8 +60,9 @@ def generate_random_study(gene_ids: List,
 
     # generate counts for the study
     tpm = np.random.default_rng().uniform(0, 10000, (len(gene_ids), 100))
+    sample_ids = ["sample_" + str(x) for x in range(0, 100)]
 
-    return study_id, contrasts, tpm
+    return study_id, contrasts, tpm, sample_ids
 
 
 def insert_study_stats(contrasts, gene_ids, base_uri=""):
@@ -89,7 +92,7 @@ def insert_study_stats(contrasts, gene_ids, base_uri=""):
     tiledb.SparseArray.create(stats_uri, schema)
     with tiledb.open(stats_uri, 'w') as A:
         for i, contrast in enumerate(contrasts):
-            print("burning witches")
+            print("Burning witches")
             contrast_coords = [contrast['id']] * len(gene_ids)  # required for tiledb sparse writes
             A[gene_ids, contrast_coords] = {"pvalue": contrast["pvalues"],
                                             "fdr": contrast["fdr"],
@@ -122,12 +125,34 @@ def insert_study_contrasts(contrasts: List,
     tiledb.SparseArray.create(contrasts_uri, schema)
 
     with tiledb.open(contrasts_uri, 'w') as A:
+        print("Administering but a scratches")
         for contrast in contrasts:
             A[contrast["id"]] = contrast["formula"]
 
 
-def insert_study_values(study_id, docs):
-    pass
+def insert_study_values(sample_ids, gene_ids, tpm, base_uri=""):
+    samples_dim = tiledb.Dim(name="sample", dtype=np.bytes_)
+    genes_dim = tiledb.Dim(name="genes", tile=1000, dtype=np.bytes_)
+    domain = tiledb.Domain(genes_dim, samples_dim)
+    expr_attr = tiledb.Attr(name="expr", dtype=np.float64)
+
+    schema = tiledb.ArraySchema(domain=domain,
+                                sparse=True,
+                                attrs=[expr_attr],
+                                cell_order='row-major',
+                                tile_order='row-major')
+
+    tpm_uri = os.path.join(base_uri, "tpm")
+
+    # create tpm array
+    tiledb.SparseArray.create(tpm_uri, schema)
+
+    # compute cartesian product of axis labels for data insertion
+    insert_coordinates = cartesian((gene_ids, sample_ids))
+
+    with tiledb.open(tpm_uri, 'w') as A:
+        print("Hanging on to an imperialist dogma")
+        A[insert_coordinates[:, 0], insert_coordinates[:, 1]] = tpm.flatten()
 
 
 def get_gene_ids():
@@ -159,13 +184,14 @@ def main():
     gene_ids = get_gene_ids()
 
     for i in range(1, 10):
-        study_id, contrasts, tpm = generate_random_study(gene_ids, n_contrasts=5)
+        study_id, contrasts, tpm, sample_ids = generate_random_study(gene_ids, n_contrasts=5)
 
         group_uri = os.path.join(base_uri, study_id)
         tiledb.group_create(group_uri)
 
         insert_study_stats(contrasts, gene_ids, base_uri=group_uri)
         insert_study_contrasts(contrasts, base_uri=group_uri)
+        insert_study_values(sample_ids, gene_ids, tpm, base_uri=group_uri)
 
 
 if __name__ == "__main__":
