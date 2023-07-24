@@ -68,8 +68,8 @@ def generate_random_study(gene_ids: List,
 def insert_study_stats(contrasts, gene_ids, base_uri=""):
     # TODO check cell order
     # define dimensions and domain
-    genes_dim = tiledb.Dim(name="genes", tile=1000, dtype=np.bytes_)
-    contrasts_dim = tiledb.Dim(name="contrasts", tile=3, dtype=np.bytes_)
+    genes_dim = tiledb.Dim(name="gene", tile=1000, dtype=np.bytes_)
+    contrasts_dim = tiledb.Dim(name="contrast", tile=3, dtype=np.bytes_)
     domain = tiledb.Domain(genes_dim, contrasts_dim)
 
     # define attributes
@@ -102,7 +102,7 @@ def insert_study_stats(contrasts, gene_ids, base_uri=""):
 def insert_study_contrasts(contrasts: List,
                            base_uri: Optional[str] = ""):
     """
-    Insert contrast information into the dense array with only one dimension - contrastid
+    Insert contrast information into a sparce array with only one dimension - contrastid
     Parameters
     ----------
     base_uri
@@ -113,7 +113,7 @@ def insert_study_contrasts(contrasts: List,
     -------
 
     """
-    contrasts_dim = tiledb.Dim(name="contrasts", dtype=np.bytes_)
+    contrasts_dim = tiledb.Dim(name="contrast", dtype=np.bytes_)
     domain = tiledb.Domain(contrasts_dim)
     formula_attr = tiledb.Attr(name="formula", dtype=np.bytes_)
 
@@ -132,7 +132,7 @@ def insert_study_contrasts(contrasts: List,
 
 def insert_study_values(sample_ids, gene_ids, tpm, base_uri=""):
     samples_dim = tiledb.Dim(name="sample", dtype=np.bytes_)
-    genes_dim = tiledb.Dim(name="genes", tile=1000, dtype=np.bytes_)
+    genes_dim = tiledb.Dim(name="gene", tile=1000, dtype=np.bytes_)
     domain = tiledb.Domain(genes_dim, samples_dim)
     expr_attr = tiledb.Attr(name="expr", dtype=np.float64)
 
@@ -153,6 +153,29 @@ def insert_study_values(sample_ids, gene_ids, tpm, base_uri=""):
     with tiledb.open(tpm_uri, 'w') as A:
         print("Hanging on to an imperialist dogma")
         A[insert_coordinates[:, 0], insert_coordinates[:, 1]] = tpm.flatten()
+
+
+def insert_study_values_dense(sample_ids, gene_ids, tpm, base_uri=""):
+    genes_dim = tiledb.Dim(name="gene", domain=(1, len(gene_ids)), tile=1000, dtype=np.int32)
+    samples_dim = tiledb.Dim(name="sample", domain=(1, len(sample_ids)), dtype=np.int32)
+
+    domain = tiledb.Domain(genes_dim, samples_dim)
+    expr_attr = tiledb.Attr(name="expr", dtype=np.float64)
+
+    schema = tiledb.ArraySchema(domain=domain,
+                                sparse=False,
+                                attrs=[expr_attr],
+                                cell_order='row-major',
+                                tile_order='row-major')
+
+    tpm_uri = os.path.join(base_uri, "tpm_dense")
+
+    # create tpm array
+    tiledb.DenseArray.create(tpm_uri, schema)
+
+    with tiledb.open(tpm_uri, 'w') as A:
+        print("Performing routines and chorus scenes with footwork impeccable")
+        A[:] = tpm
 
 
 def get_gene_ids():
@@ -192,6 +215,7 @@ def main():
         insert_study_stats(contrasts, gene_ids, base_uri=group_uri)
         insert_study_contrasts(contrasts, base_uri=group_uri)
         insert_study_values(sample_ids, gene_ids, tpm, base_uri=group_uri)
+        insert_study_values_dense(sample_ids, gene_ids, tpm, base_uri=group_uri)
 
 
 if __name__ == "__main__":
